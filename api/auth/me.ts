@@ -1,45 +1,48 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 import jwt from "jsonwebtoken";
-import { connectDB, User } from "../_db";
+import mongoose from "mongoose";
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-) {
+const MONGO_URL = process.env.MONGO_URL!;
+const JWT_SECRET = process.env.JWT_SECRET!;
+
+let cached = (global as any).mongoose;
+if (!cached) cached = (global as any).mongoose = { conn: null, promise: null };
+
+async function connectDB() {
+  if (cached.conn) return cached.conn;
+  if (!cached.promise) {
+    cached.promise = mongoose.connect(MONGO_URL).then((m) => m);
+  }
+  cached.conn = await cached.promise;
+  return cached.conn;
+}
+
+const User =
+  mongoose.models.User ||
+  mongoose.model(
+    "User",
+    new mongoose.Schema({
+      email: { type: String, unique: true },
+      passwordHash: String,
+      createdAt: { type: Date, default: Date.now },
+    })
+  );
+
+export default async function handler(req: any, res: any) {
   try {
-    if (req.method !== "GET") {
-      return res.status(405).json({ error: "METHOD_NOT_ALLOWED" });
-    }
+    if (req.method !== "GET") return res.status(405).end();
 
-    const JWT_SECRET = process.env.JWT_SECRET;
-    if (!JWT_SECRET) {
-      throw new Error("JWT_SECRET missing");
-    }
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).end();
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return res.status(401).json({ error: "UNAUTHORIZED" });
-    }
-
-    const token = authHeader.split(" ")[1];
-    if (!token) {
-      return res.status(401).json({ error: "UNAUTHORIZED" });
-    }
-
-    const payload = jwt.verify(token, JWT_SECRET) as { id: string };
+    const token = auth.split(" ")[1];
+    const payload = jwt.verify(token, JWT_SECRET) as any;
 
     await connectDB();
-
     const user = await User.findById(payload.id).select("email");
-    if (!user) {
-      return res.status(401).json({ error: "USER_NOT_FOUND" });
-    }
 
-    return res.status(200).json({
-      user: { email: user.email },
-    });
+    res.json({ user });
   } catch (err) {
-    console.error("ME ERROR:", err);
-    return res.status(401).json({ error: "INVALID_TOKEN" });
+    console.error(err);
+    res.status(401).end();
   }
 }
